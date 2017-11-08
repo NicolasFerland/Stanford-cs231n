@@ -138,11 +138,19 @@ def adam(x, dx, config=None):
     # the next_x variable. Don't forget to update the m, v, and t variables   #
     # stored in config.                                                       #
     ###########################################################################
-    config['m'] = config['beta1']*config['m'] + (1-config['beta1'])*dx
-    mt = config['m'] / (1-config['beta1']**config['t'])
-    config['v'] = config['beta2']*v + (1-config['beta2'])*(dx**2)
-    vt = v / (1-config['beta2']**config['t'])
-    x += - config['learning_rate'] * mt / (np.sqrt(vt) + config['epsilon'])
+    biasCorrection = True # biasCorrection is recommended on the course website and that's what's in the paper.
+    # biasCorrection = True: 0.00152184517579, biasCorrection = False: 0.207207036686
+    # So both are inexact, but True is better.
+    if biasCorrection:
+        config['m'] = config['beta1']*config['m'] + (1-config['beta1'])*dx
+        mt = config['m'] / (1-config['beta1']**config['t'])
+        config['v'] = config['beta2']*config['v'] + (1-config['beta2'])*(dx**2)
+        vt = config['v'] / (1-config['beta2']**config['t'])
+        x += - config['learning_rate'] * mt / (np.sqrt(vt) + config['epsilon'])
+    else:
+        config['m'] = config['beta1']*config['m'] + (1-config['beta1'])*dx
+        config['v'] = config['beta2']*config['v'] + (1-config['beta2'])*(dx**2)
+        x += - config['learning_rate'] * config['m'] / (np.sqrt(config['v']) + config['epsilon'])
     ###########################################################################
     #                             END OF YOUR CODE                            #
     ###########################################################################
