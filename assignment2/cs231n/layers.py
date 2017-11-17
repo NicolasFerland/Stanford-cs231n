@@ -181,11 +181,7 @@ def batchnorm_forward(x, gamma, beta, bn_param):
         bn_param['running_mean'] = momentum * running_mean + (1 - momentum) * mean
         bn_param['running_var'] = momentum * running_var + (1 - momentum) * var
         out = (x - mean) / np.sqrt(var + eps) * gamma + beta # Change mean and std of x to beta and gamma
-        cache['mean'] = mean
-        cache['var'] = var
-        cache['gamma'] = gamma
-        cache['eps'] = eps
-        cache['x'] = x
+        cache = (mean, var, gamma, eps, x)
         #######################################################################
         #                           END OF YOUR CODE                          #
         #######################################################################
@@ -228,19 +224,45 @@ def batchnorm_backward(dout, cache):
     # TODO: Implement the backward pass for batch normalization. Store the    #
     # results in the dx, dgamma, and dbeta variables.                         #
     ###########################################################################
-    eps = cache['eps']
+    (mean, var, gamma, eps, x) = cache
     
     # out = (x - mean) / np.sqrt(var + eps) * gamma + beta
     # da = dL/da ~ dL/dout dout/da       dL/dout = dout (N,D)  General formula
-    # dout/dx = gamma / np.sqrt(var + eps) # D
     # dout/gamma = (x - mean) / np.sqrt(var + eps) # (N,D)
     # dout/dbeta = 1
     
-    doutdx = cache['gamma'] / np.sqrt(cache['var'] + eps)
-    dx = dout * doutdx[np.newaxis,:]
-    doutdgamma = (cache['x'] - cache['mean']) / np.sqrt(cache['var'] + eps)
+    vareps = var + eps
+    sqrtVar = np.sqrt(vareps)
+    doutdgamma = (x - mean) / sqrtVar
     dgamma = np.sum(dout * doutdgamma,axis=0)
     dbeta = np.sum(dout,axis=0)
+    
+    # split dL/dx[n,d] into 2 partial derivatives that we will sum
+    
+    # dL/dout dot dout/d(x-mean) dot d(x-mean)/dx[n,d] = sum( dout[n1,d1] * gamma/sqrtVar[n1,d1] * (delta(n1,n)-1/N) delta(d1,d) ,n1 d1)
+    # = dout[n,d] * gamma/sqrtVar[n,d] - sum(dout[n1,d] * gamma/sqrtVar[n1,d],n1)/N
+    
+    # dVar[d1]/dx[n,d] = d(sum((x[n2,d1]-mean[d1])^2,n2))/dx[n,d]/N = sum( d((x[n2,d1]-mean[d1])^2)/dx[n,d] ,n2)/N
+    # = 2*sum( (x[n2,d1]-mean[d1])*(delta(n2,n)-1/N) delta(d1,d) ,n2)/N
+    
+    # dL/dout dot dout/d(1 / sqrtVar) dot d(1 / sqrtVar)/dx[n,d] = 
+    # sum( dout[n1,d1] * gamma*(x-mean)[n1,d1] * sqrtVar[d1]^-3*-0.5*dVar[d1]/dx[n,d]    ,n1 d1)
+    # = -sum( dout[n1,d] * gamma*(x-mean)[n1,d] * sqrtVar[d]^-3 * ((x[n,d]-mean[d]) - sum((x[n2,d]-mean[d]),n2)/N )/N    ,n1)
+    
+    N = x.shape[0]
+    
+    #dx1 = dout * gamma/sqrtVar - np.sum(dout * gamma/sqrtVar, axis=0)/N
+    #dx2 = -np.sum(dout * gamma*(x-mean),axis=0) * sqrtVar^-3* ((x-mean) - np.sum((x-mean),axis=0)/N) /N
+    
+    # Simplify
+    tmp = dout * gamma/sqrtVar
+    dx1 = tmp - np.mean(tmp,axis=0)
+    tmp2 = x-mean
+    # dx2 = -dgamma/N*gamma*sqrtVar^-2 * (tmp2 - np.mean(tmp2,axis=0))
+    dx2 = -dgamma/N*gamma/vareps * (tmp2 - np.mean(tmp2,axis=0))
+    
+    dx = dx1 + dx2
+    
     ###########################################################################
     #                             END OF YOUR CODE                            #
     ###########################################################################
@@ -578,7 +600,26 @@ def spatial_batchnorm_forward(x, gamma, beta, bn_param):
     # version of batch normalization defined above. Your implementation should#
     # be very short; ours is less than five lines.                            #
     ###########################################################################
-    pass
+    mode = bn_param['mode']
+    eps = bn_param.get('eps', 1e-5)
+    momentum = bn_param.get('momentum', 0.9)
+
+    C = x.shape[1]
+    running_mean = bn_param.get('running_mean', np.zeros(C, dtype=x.dtype))
+    running_var = bn_param.get('running_var', np.zeros(C, dtype=x.dtype))
+
+    if mode == 'train':
+        mean = x.mean(axis=(0,2,3)) # N, C, H, W -> C
+        var = x.var(axis=(0,2,3))  # N, C, H, W -> C
+        bn_param['running_mean'] = momentum * running_mean + (1 - momentum) * mean
+        bn_param['running_var'] = momentum * running_var + (1 - momentum) * var
+        out = (x - mean[:,np.newaxis,np.newaxis]) / np.sqrt(var[:,np.newaxis,np.newaxis] + eps) * gamma[:,np.newaxis,np.newaxis] + beta[:,np.newaxis,np.newaxis] 
+        # Change mean and std of x to beta and gamma
+        cache = (mean, var, gamma, eps, x)
+    elif mode == 'test':
+        out = (x - running_mean[:,np.newaxis,np.newaxis]) / np.sqrt(running_var[:,np.newaxis,np.newaxis] + eps) * gamma[:,np.newaxis,np.newaxis] + beta[:,np.newaxis,np.newaxis]
+    else:
+        raise ValueError('Invalid forward batchnorm mode "%s"' % mode)
     ###########################################################################
     #                             END OF YOUR CODE                            #
     ###########################################################################
@@ -608,7 +649,27 @@ def spatial_batchnorm_backward(dout, cache):
     # version of batch normalization defined above. Your implementation should#
     # be very short; ours is less than five lines.                            #
     ###########################################################################
-    pass
+    
+    # It's the same as before, but every sum over 0 becomes a sum over (0,2,3) and N becomes x.shape[0]*x.shape[2]*x.shape[3]
+    
+    (mean, var, gamma, eps, x) = cache
+    
+    mean = mean[:,np.newaxis,np.newaxis]
+    gamma = gamma[:,np.newaxis,np.newaxis]
+    vareps = var[:,np.newaxis,np.newaxis] + eps
+    sqrtVar = np.sqrt(vareps)
+    doutdgamma = (x - mean) / sqrtVar
+    dgamma = np.sum(dout * doutdgamma,axis=(0,2,3))
+    dbeta = np.sum(dout,axis=(0,2,3))
+    
+    N = x.shape[0]*x.shape[2]*x.shape[3]
+    tmp = dout * gamma/sqrtVar
+    dx1 = tmp - np.mean(tmp,axis=(0,2,3))[:,np.newaxis,np.newaxis]
+    tmp2 = x-mean
+    dx2 = -dgamma[:,np.newaxis,np.newaxis]/N*gamma/vareps * (tmp2 - np.mean(tmp2,axis=(0,2,3))[:,np.newaxis,np.newaxis])
+    
+    dx = dx1 + dx2
+    
     ###########################################################################
     #                             END OF YOUR CODE                            #
     ###########################################################################
